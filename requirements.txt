@@ -1,0 +1,4 @@
+numpy
+django
+scikit-image
+gunicorn

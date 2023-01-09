@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Deeptangle Spline Labelling</title>
+    <script src="/static/d3.v7.min.js"></script>
+    <style>
+        circle {
+            opacity: 0.7;
+        }
+        body {
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+
+<div>
+    <span>
+        <i>{{ name }}</i>
+    </span>
+    {% if minus or plus %}
+        <span id="frame" style="display:inline; margin-left: 20px">
+            -{{ minus }}  &mdash; <b>0</b>  &mdash; +{{ plus }}
+        </span>
+        <span id="offcenter" style="color:red; display:none; margin-left: 10px">
+        Off center frame
+            </span>
+    {% endif %}
+    <span id="count" style="color:blue; display:inline; margin-left: 20px">
+        0 splines saved
+    </span>
+    <span id="boxIsSaved" style="color:green; margin-left: 20px; {% if box_saved %}display:inline{% else %}display:none{% endif %}">
+        Box is saved <span style="color: black">(<span id="delBox" style="text-decoration: underline; cursor: pointer">Delete</span>)</span>
+    </span>
+    <span id="boxNotSaved" style="color:red; margin-left: 20px; {% if box_saved %}display:none{% else %}display:inline{% endif %}">
+        Box not saved <span style="color: black">(<span id="saveBox" style="text-decoration: underline; cursor: pointer">Save</span>)</span>
+    </span>
+    <span id="save" style="color:green; display:none; margin-left: 20px">
+        Spline saved
+    </span>
+    <span id="error" style="color:red; display:none; margin-left: 20px">
+        Error
+    </span>
+    <span style="margin-left: 20px; float:right">
+        <a href="/">New box{% if not box_saved %} (Ctrl + R){% endif %}</a>
+    </span>
+</div>
+
+<div id="main">
+</div>
+<div>
+    <b>Scroll wheel</b>: Zoom
+    <br>
+    <b>Shift-drag</b>: Pan
+    <br>
+    <b>Click</b>: Add point
+    <br>
+    <b>Shift-Click</b>: Add point along spline
+    <br>
+    <b>Spacebar</b>: Confirm spline
+    <br>
+    <b>Ctrl-click</b>: Remove point/spline
+    <br>
+    {% if minus or plus %}
+    <b>w / s</b>: Change frame back / forward
+    <br>
+    {% endif %}
+    <a href="results.json"><b>Download</b>: all labels</a> <a href="show/"><b>Show</b>: all labels</a>
+</div>
+
+<script>
+    const dataset_name = "{{ name }}";
+
+    let width = screen.width - 250, height = screen.height - 350;
+    let imgHeight = {{ h }}, imgWidth = {{ w }};
+
+    let data = {{ data | safe}};
+    let current = [];
+    let index = {{ index }};
+    let image_index = 0;
+    const box = {{ box | safe }};
+
+    svg = d3.select("#main").append("svg")
+        .attr("width", width + "px")
+        .attr("height", height + "px");
+
+    function line_segment_distance2(v, w, p) {
+        // distance squared from p to line segment b/w v and w.
+        let l2 = (v[0] - w[0])**2 + (v[1] - w[1])**2;
+        if (l2 < 0.0001) {
+            return (v[0] - p[0])**2 + (v[1] - p[1])**2;
+        }
+        let t = ((p[0] - v[0]) * (w[0] - v[0]) + (p[1] - v[1]) * (w[1] - v[1])) / l2;
+        if (t < 0) {
+            return (v[0] - p[0])**2 + (v[1] - p[1])**2;
+        }
+        if (t > 1) {
+            return (w[0] - p[0])**2 + (w[1] - p[1])**2;
+        }
+        let pl = [v[0] + t *(w[0] - v[0]), v[1] + t *(w[1] - v[1])];
+        return (pl[0] - p[0])**2 + (pl[1] - p[1])**2;
+    }
+
+    d3.select('#saveBox').on("click", function (e) {
+        save(true);
+    });
+
+    d3.select('#delBox').on("click", function (e) {
+        fetch('/delete/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({"name": dataset_name, "box": box})
+       }).then(response => {
+            if (response.ok) {
+                document.getElementById('boxIsSaved').style.display = 'none';
+                document.getElementById('boxNotSaved').style.display = 'inline';
+            } else {
+                alert("Error deleting box!");
+            }
+        });
+    });
+
+    svg.on("click", function (e) {
+        if (image_index !== 0) {
+            return;
+        }
+
+        let t = d3.zoomTransform(g.node());
+        let xy = t.invert([e.offsetX, e.offsetY]);
+
+        if (e.ctrlKey) {
+            let closest = -1;
+            let best = 10000;
+            let inData = true;
+
+            for (const [i, arr] of Object.entries(data)) {
+                for (const x of arr) {
+                    let d2 = (x.x - xy[0]) ** 2 + (x.y - xy[1]) ** 2
+                    if (d2 < best) {
+                        best = d2;
+                        closest = i;
+                    }
+                }
+            }
+
+            for (let i = 0; i < current.length; i++) {
+                const x = current[i];
+                let d2 = (x.x - xy[0]) ** 2 + (x.y - xy[1]) ** 2;
+                if (d2 < best) {
+                    best = d2;
+                    closest = i;
+                    inData = false;
+                }
+            }
+
+            if (inData) {
+                delete data[closest];
+                update(true);
+            } else {
+                current.splice(closest, 1);
+                update();
+            }
+            save();
+        } else {
+            if (current.length <= 1 || !e.shiftKey) {
+                current.push({
+                    x: xy[0],
+                    y: xy[1]
+                });
+            } else {
+                let i = 0;
+                let best = 100000;
+                let d2;
+                let p1, p2;
+
+                for (let j = 0; j <= current.length; j++) {
+                    if (j === 0) {
+                        p1 = [current[0].x, current[0].y];
+                        p2 = [3 * current[j].x - 2 * current[j + 1].x, 3 * current[j].y - 2 * current[j + 1].y];
+                    } else if (j === current.length) {
+                        p1 = [current[j - 1].x, current[j - 1].y];
+                        p2 = [3 * current[j - 1].x - 2 * current[j - 2].x, 3 * current[j - 1].y - 2 * current[j - 2].y];
+                    } else {
+                        p1 = [current[j].x, current[j].y];
+                        p2 = [current[j - 1].x, current[j - 1].y];
+                    }
+                    d2 = line_segment_distance2(p1, p2, xy);
+                    if (d2 < best) {
+                        best = d2;
+                        i = j;
+                    }
+                }
+
+                current.splice(i, 0, {
+                    x: xy[0],
+                    y: xy[1]
+                });
+            }
+            update();
+        }
+    });
+
+    g = svg.append("g");
+
+    image = g.append("image")
+        .attr("width", imgWidth + "px")
+        .attr("height", imgHeight + "px")
+        .attr("xlink:href", "static/{{ name }}/w.png");
+
+    g.append("rect")
+        .attr("x", box[0])
+        .attr("y", box[1])
+        .attr("width", box[2])
+        .attr("height", box[2])
+        .attr("stroke", "teal")
+        .attr("fill", "teal")
+        .attr("stroke-opacity", "0.2")
+        .attr("fill-opacity", "0.015");
+
+    const factor = 0.4
+    const magnification = 0.5 * factor * (imgHeight +  imgWidth) / box[2];
+    const w_pad = (width - magnification * box[2]) / 2;
+    const h_pad = (height - magnification * box[2]) / 2;
+
+    function zoomfilter(event) {
+        return (event.shiftKey || event.type === 'wheel') && !event.button;
+    }
+
+    let zoom = d3.zoom()
+        .on('zoom', handleZoom)
+        .filter(zoomfilter);
+
+    function handleZoom(e) {
+        g.attr('transform', e.transform);
+    }
+
+    function initZoom() {
+        svg.call(zoom);
+        svg.call(zoom.transform, d3.zoomIdentity.scale(magnification).translate(-box[0] + w_pad/magnification, -box[1] + h_pad/magnification));
+    }
+
+    function update(full=false) {
+        document.getElementById("count").innerHTML = Object.keys(data).length.toString() + " splines saved";
+
+        g.selectAll(".current").remove();
+        if (full) {
+            g.selectAll(".saved").remove();
+        }
+
+        if (image_index === 0) {
+            if (full) {
+                for (const [name, arr] of Object.entries(data)) {
+                    for (let i = 0; i < arr.length; i++) {
+                        let x = arr[i];
+                        g.append("circle")
+                            .attr('cx', x.x)
+                            .attr('cy', x.y)
+                            .attr('r', 0.25)
+                            .attr('class', 'saved')
+                            .style('fill', '#251');
+                        if (i > 0) {
+                            g.append("line")
+                                .attr("x1", x.x)
+                                .attr('class', 'saved')
+                                .attr("y1", x.y)
+                                .attr("x2", arr[i - 1].x)
+                                .attr("y2", arr[i - 1].y)
+                                .attr("stroke", '#251')
+                                .attr("stroke-width", 0.1);
+                        }
+                    }
+                }
+            }
+
+            for (let i = 0; i < current.length; i++) {
+                let x = current[i];
+                g.append("circle")
+                    .attr('cx', x.x)
+                    .attr('cy', x.y)
+                    .attr('r', 0.25)
+                    .attr("class", "current")
+                    .style('fill', '#f21');
+                if (i > 0) {
+                    g.append("line")
+                        .attr("x1", x.x)
+                        .attr("y1", x.y)
+                        .attr("x2", current[i - 1].x)
+                        .attr("y2", current[i - 1].y)
+                        .attr("class", "current")
+                        .attr("stroke", '#f21')
+                        .attr("stroke-width", 0.1);
+                }
+
+            }
+        }
+    }
+
+    initZoom();
+
+    function save(noSpline=false) {
+        document.getElementById('save').style.display = 'none';
+        document.getElementById('error').style.display = 'none';
+
+        fetch('save/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({"data": data, "name": dataset_name,
+                                  "box": {{ box | safe}}})
+        }).then(response => {
+            if (response.ok) {
+                if (!noSpline) {
+                    document.getElementById('save').style.display = 'inline';
+                }
+                document.getElementById('boxIsSaved').style.display = 'inline';
+                document.getElementById('boxNotSaved').style.display = 'none';
+
+                setTimeout(() => {
+                    document.getElementById('save').style.display = 'none';
+                }, 500);
+                return;
+            }
+            document.getElementById('error').style.display = 'inline';
+        });
+    }
+
+    function change_image() {
+        if (image_index === 0) {
+            image.attr("xlink:href", "static/{{ name }}/w.png");
+            document.getElementById('offcenter').style.display = 'none';
+        } else if (image_index < 0) {
+            image.attr("xlink:href", "static/{{ name }}/w_" + image_index.toString() + ".png");
+            document.getElementById('offcenter').style.display = 'inline';
+        } else {
+            image.attr("xlink:href", "static/{{ name }}/w_+" + image_index.toString() + ".png");
+            document.getElementById('offcenter').style.display = 'inline';
+        }
+        document.getElementById("frame").innerHTML = "-{{ minus }}  &mdash; <b>" + image_index.toString()
+            +  "</b>  &mdash; +{{ plus }}"
+        update(true);
+    }
+
+    d3.select("body")
+        .on("keydown", function (e) {
+            if (e.keyCode === 32) {  // space
+                if (current.length > 0) {
+                    data[index] = current;
+                    current = [];
+                    index += 1;
+                    update(true);
+                    save();
+                }
+            } else if (e.keyCode === 65) { // w
+                if (image_index - 1 >= -{{ minus }}) {
+                    image_index -= 1;
+                    change_image();
+                }
+            } else if (e.keyCode  === 68) { // s
+                if (image_index + 1 <= {{ plus }}) {
+                    image_index += 1;
+                    change_image();
+                }
+            }
+        });
+
+    update(true);
+
+    {% if minus or plus %}
+        function preloadImage(url) {
+            let img = new Image();
+            img.src = url;
+        }
+
+        for (let i = -{{ minus }}; i <= {{ plus }}; i++) {
+            if (i < 0) {
+                preloadImage("static/{{ name }}/w_" + i.toString() + ".png");
+            } else if (i > 0) {
+                preloadImage("static/{{ name }}/w_+" + i.toString() + ".png");
+            }
+        }
+    {% endif %}
+</script>
+</body>
+</html>

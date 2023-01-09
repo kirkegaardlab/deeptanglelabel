@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Deeptangle Spline Labelling</title>
+    <script src="/static/d3.v7.min.js"></script>
+    <style>
+        circle {
+            opacity: 0.7;
+        }
+        body {
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+
+<div>
+    <a href="/">Back</a>
+</div>
+
+<div id="main">
+</div>
+<div style="width:500px">
+    <a href="/">Back</a>
+</div>
+
+<script>
+    let width = 500, height = 500;
+    let imgHeight = {{ h }}, imgWidth = {{ w }};
+
+    function random_color() {
+        return 'hsla(' + (120 + 240 * Math.random()) + ', 100%, 35%, 1)';
+    }
+
+    function draw_img_box(name, box_, splines) {
+        let box = [box_.x0, box_.y0, box_.size];
+
+        let div = d3.select("#main").append("div").attr("style", "float:left; margin:10px");
+        let div0 = div.append("div");
+        let div1 = div.append("div");
+        let div2 = div.append("div");
+        let del_text = div2.append("a")
+            .html("Delete box").attr("style", "cursor:pointer; text-decoration:underline");
+
+        div0.append("span").html(name);
+
+        del_text.on("click", function (e) {
+           if (confirm('Are you sure you want to delete this box from the database? (splines will not be deleted)')) {
+               fetch('/delete/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({"name": name, "box": box})
+               }).then(response => {
+                    if (response.ok) {
+                        div.remove();
+                    } else {
+                        alert("Error deleting box!");
+                    }
+                });
+           }
+        });
+
+        let a = div1.append("a")
+            .attr("href", "/?name=" + name + "&x0=" + box[0].toString()
+                + "&y0=" + box[1].toString() + "&size=" + box[2].toString());
+
+        let svg = a.append("svg")
+            .attr("width", width + "px")
+            .attr("height", height + "px");
+
+        let g = svg.append("g");
+
+        let image = g.append("image")
+        .attr("width", imgWidth + "px")
+        .attr("height", imgHeight + "px")
+        .attr("xlink:href", "/static/" + name + "/w.png");
+
+        g.append("rect")
+            .attr("x", box[0])
+            .attr("y", box[1])
+            .attr("width", box[2])
+            .attr("height", box[2])
+            .attr("stroke", "teal")
+            .attr("fill", "teal")
+            .attr("stroke-opacity", "0.2")
+            .attr("fill-opacity", "0.025");
+
+
+        for (let spl of Object.values(splines)) {
+            let c = random_color();
+            for (let i = 0; i < spl.length; i++) {
+                let x = spl[i];
+                g.append("circle")
+                    .attr('cx', x.x)
+                    .attr('cy', x.y)
+                    .attr('r', 0.35)
+                    .style('fill', c);
+                if (i > 0) {
+                    g.append("line")
+                        .attr("x1", x.x)
+                        .attr("y1", x.y)
+                        .attr("x2", spl[i - 1].x)
+                        .attr("y2", spl[i - 1].y)
+                        .attr("stroke", c)
+                        .attr("stroke-width", 0.1);
+                }
+            }
+        }
+
+        const factor = 0.2;
+        const magnification = 0.5 * factor * (imgHeight +  imgWidth) / box[2];
+        console.log(magnification);
+        const w_pad = (width - magnification * box[2]) / 2;
+        const h_pad = (height - magnification * box[2]) / 2;
+
+        g.attr("transform", 'translate(' + (-magnification * box[0] + w_pad).toString()
+            + ',' + (-magnification * box[1] + h_pad).toString() + ') scale(' + magnification.toString() + ')')
+
+    }
+
+    fetch('/results.json')
+      .then((response) => response.json())
+      .then((data) => {
+          for (const [name, boxes] of Object.entries(data.boxes)) {
+              for (const [boxid, box] of Object.entries(boxes)) {
+                  let splines = data.splines[name];
+                  draw_img_box(name, box, splines);
+              }
+          }
+      });
+
+</script>
+</body>
+</html>
