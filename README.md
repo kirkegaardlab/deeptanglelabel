@@ -1,5 +1,7 @@
-# DeepTangle-Label
+# de(ep)tangle-Label
+This repository contains the labelling software which was used to create the dataset employed in the paper [Fast spline detection in high density microscopy data](https://arxiv.org/abs/2301.04460).
 
+## Instructions
 Ensure you have a database, or create one using
 ```
 python manage.py migrate
